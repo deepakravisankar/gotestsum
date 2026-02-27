@@ -326,6 +326,58 @@ func TestGoTestCmdArgs(t *testing.T) {
 		run(t, "first", tc)
 		run(t, "second", tc)
 	})
+
+	run(t, "rerun with coverprofile equals form", testCase{
+		opts: &options{
+			args:     []string{"-coverprofile=cover.out", "-timeout=2m"},
+			packages: []string{"./pkg"},
+		},
+		rerunOpts: rerunOpts{
+			runFlag:         "-run=TestOne",
+			pkg:             "./fails",
+			coverProfileArg: "/tmp/rerun-cover.out",
+		},
+		expected: []string{"go", "test", "-json", "-run=TestOne",
+			"-coverprofile=/tmp/rerun-cover.out", "-timeout=2m", "./fails"},
+	})
+	run(t, "rerun with coverprofile space form", testCase{
+		opts: &options{
+			args:     []string{"-coverprofile", "cover.out", "-timeout=2m"},
+			packages: []string{"./pkg"},
+		},
+		rerunOpts: rerunOpts{
+			runFlag:         "-run=TestOne",
+			pkg:             "./fails",
+			coverProfileArg: "/tmp/rerun-cover.out",
+		},
+		expected: []string{"go", "test", "-json", "-run=TestOne",
+			"-coverprofile=/tmp/rerun-cover.out", "-timeout=2m", "./fails"},
+	})
+	run(t, "rerun with test.coverprofile form", testCase{
+		opts: &options{
+			args:     []string{"-test.coverprofile=cover.out"},
+			packages: []string{"./pkg"},
+		},
+		rerunOpts: rerunOpts{
+			runFlag:         "-run=TestOne",
+			pkg:             "./fails",
+			coverProfileArg: "/tmp/rerun-cover.out",
+		},
+		expected: []string{"go", "test", "-json", "-run=TestOne",
+			"-coverprofile=/tmp/rerun-cover.out", "./fails"},
+	})
+	run(t, "rerun without coverprofile unchanged", testCase{
+		opts: &options{
+			args:     []string{"-coverprofile=cover.out", "-timeout=2m"},
+			packages: []string{"./pkg"},
+		},
+		rerunOpts: rerunOpts{
+			runFlag: "-run=TestOne",
+			pkg:     "./fails",
+		},
+		expected: []string{"go", "test", "-json", "-run=TestOne",
+			"-coverprofile=cover.out", "-timeout=2m", "./fails"},
+	})
 }
 
 func runCase(t *testing.T, name string, fn func(t *testing.T)) {

@@ -272,3 +272,76 @@ func (s noopHandler) Event(testjson.TestEvent, *testjson.Execution) error {
 func (s noopHandler) Err(string) error {
 	return nil
 }
+
+func TestRerunFailed_MergesCoverProfile(t *testing.T) {
+	dir := t.TempDir()
+	coverFile := dir + "/cover.out"
+
+	// Write an initial cover profile (simulating what the first full run produced).
+	err := os.WriteFile(coverFile, []byte(
+		"mode: set\n"+
+			"pkg/a.go:1.1,5.2 3 1\n"+
+			"pkg/a.go:6.1,10.2 2 0\n"+
+			"pkg/b.go:1.1,5.2 3 1\n",
+	), 0o644)
+	assert.NilError(t, err)
+
+	// The rerun mock writes a cover profile to whatever -coverprofile path
+	// it receives in the args, simulating go test's output.
+	fn := func(args []string) *proc {
+		// Find the -coverprofile arg and write a rerun profile to it.
+		for _, arg := range args {
+			if rerunPath, ok := strings.CutPrefix(arg, "-coverprofile="); ok {
+				_ = os.WriteFile(rerunPath, []byte(
+					"mode: set\n"+
+						"pkg/a.go:1.1,5.2 3 0\n"+
+						"pkg/a.go:6.1,10.2 2 1\n",
+				), 0o644)
+			}
+		}
+		return &proc{
+			cmd: fakeWaiter{result: nil},
+			stdout: strings.NewReader(dedentOutput(`
+				{"Package": "pkg", "Action": "run"}
+				{"Package": "pkg", "Test": "TestOne", "Action": "run"}
+				{"Package": "pkg", "Test": "TestOne", "Action": "pass"}
+				{"Package": "pkg", "Action": "pass"}
+			`)),
+			stderr: bytes.NewReader(nil),
+		}
+	}
+	reset := patchStartGoTestFn(fn)
+	defer reset()
+
+	ctx := context.Background()
+	opts := &options{
+		rerunFailsMaxInitialFailures: 10,
+		rerunFailsMaxAttempts:        1,
+		args:                         []string{"-coverprofile=" + coverFile},
+		packages:                     []string{"./pkg"},
+		stdout:                       new(bytes.Buffer),
+	}
+
+	exec := newExecutionWithTwoFailures(t)
+	cfg := testjson.ScanConfig{
+		Execution: exec,
+		Handler:   noopHandler{},
+	}
+	err = rerunFailed(ctx, opts, cfg)
+	assert.NilError(t, err)
+
+	// Verify the original cover profile was merged, not overwritten.
+	raw, err := os.ReadFile(coverFile)
+	assert.NilError(t, err)
+	content := string(raw)
+
+	// pkg/a.go:1.1,5.2 should be 1 (OR of original=1 and rerun=0)
+	assert.Assert(t, strings.Contains(content, "pkg/a.go:1.1,5.2 3 1"),
+		"expected original coverage preserved, got: %s", content)
+	// pkg/a.go:6.1,10.2 should be 1 (OR of original=0 and rerun=1)
+	assert.Assert(t, strings.Contains(content, "pkg/a.go:6.1,10.2 2 1"),
+		"expected rerun coverage merged, got: %s", content)
+	// pkg/b.go should still be present from the original
+	assert.Assert(t, strings.Contains(content, "pkg/b.go:1.1,5.2 3 1"),
+		"expected untouched file preserved, got: %s", content)
+}

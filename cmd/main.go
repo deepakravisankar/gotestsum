@@ -380,6 +380,17 @@ func goTestCmdArgs(opts *options, rerunOpts rerunOpts) []string {
 		result = append(result, rerunOpts.runFlag)
 	}
 
+	if rerunOpts.coverProfileArg != "" {
+		// Redirect -coverprofile to a temp file so reruns don't overwrite
+		// the original coverage data. The caller merges the results.
+		for _, flag := range []string{"coverprofile", "test.coverprofile"} {
+			if idx, idxEnd := argIndex(flag, args); idx >= 0 && idxEnd < len(args) {
+				args = append(args[:idx], args[idxEnd+1:]...)
+			}
+		}
+		result = append(result, "-coverprofile="+rerunOpts.coverProfileArg)
+	}
+
 	pkgArgIndex := findPkgArgPosition(args)
 	result = append(result, args[:pkgArgIndex]...)
 	result = append(result, cmdArgPackageList(opts, rerunOpts)...)

@@ -8,12 +8,15 @@ import (
 	"sort"
 	"strings"
 
+	"gotest.tools/gotestsum/internal/coverprofile"
+	"gotest.tools/gotestsum/internal/log"
 	"gotest.tools/gotestsum/testjson"
 )
 
 type rerunOpts struct {
-	runFlag string
-	pkg     string
+	runFlag         string
+	pkg             string
+	coverProfileArg string
 }
 
 func (o rerunOpts) Args() []string {
@@ -56,6 +59,8 @@ func rerunFailed(ctx context.Context, opts *options, scanConfig testjson.ScanCon
 	defer cancel()
 	tcFilter := rerunFailsFilter(opts)
 
+	originalCoverProfile := coverprofile.ArgValue(opts.args)
+
 	rec := newFailureRecorderFromExecution(scanConfig.Execution)
 	for attempts := 0; rec.count() > 0 && attempts < opts.rerunFailsMaxAttempts; attempts++ {
 		testjson.PrintSummary(opts.stdout, scanConfig.Execution, testjson.SummarizeNone)
@@ -63,7 +68,21 @@ func rerunFailed(ctx context.Context, opts *options, scanConfig testjson.ScanCon
 
 		nextRec := newFailureRecorder(scanConfig.Handler)
 		for _, tc := range tcFilter(rec.failures) {
-			goTestProc, err := startGoTestFn(ctx, "", goTestCmdArgs(opts, newRerunOptsFromTestCase(tc)))
+			rerunTC := newRerunOptsFromTestCase(tc)
+
+			var tmpCoverProfile string
+			if originalCoverProfile != "" {
+				tmpFile, err := os.CreateTemp("", "gotestsum-rerun-cover-*.out")
+				if err != nil {
+					return fmt.Errorf("create temp cover profile: %w", err)
+				}
+				tmpCoverProfile = tmpFile.Name()
+				_ = tmpFile.Close()
+				defer func() { _ = os.Remove(tmpCoverProfile) }() //nolint:gocritic
+				rerunTC.coverProfileArg = tmpCoverProfile
+			}
+
+			goTestProc, err := startGoTestFn(ctx, "", goTestCmdArgs(opts, rerunTC))
 			if err != nil {
 				return err
 			}
@@ -83,6 +102,14 @@ func rerunFailed(ctx context.Context, opts *options, scanConfig testjson.ScanCon
 			if exitErr != nil {
 				nextRec.lastErr = exitErr
 			}
+
+			if tmpCoverProfile != "" {
+				if mergeErr := coverprofile.MergeRerun(originalCoverProfile, tmpCoverProfile); mergeErr != nil {
+					log.Debugf("failed to merge rerun cover profile: %v", mergeErr)
+				}
+				_ = os.Remove(tmpCoverProfile)
+			}
+
 			if err := hasErrors(exitErr, scanConfig.Execution, opts); err != nil {
 				return err
 			}
